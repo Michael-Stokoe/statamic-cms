@@ -16,7 +16,8 @@ class Update extends Command
 
     protected $signature = 'statamic:search:update
         { index? : The handle of the index to update. }
-        { --all : Update all indexes. }';
+        { --all : Update all indexes. }
+        { --chunk= : Process in chunks of the specified size. }';
 
     protected $description = 'Update a search index';
 
@@ -25,12 +26,34 @@ class Update extends Command
     public function handle()
     {
         foreach ($this->getIndexes() as $index) {
-            $index->update();
+            if ($chunkSize = $this->option('chunk')) {
+                $this->updateInChunks($index, (int) $chunkSize);
+            } else {
+                $index->update();
+            }
 
             SearchIndexUpdated::dispatch($index);
 
             $this->components->info("Index <comment>{$index->name()}</comment> updated.");
         }
+    }
+
+    private function updateInChunks($index, int $chunkSize)
+    {
+        $reflection = new \ReflectionClass($index);
+        $deleteMethod = $reflection->getMethod('deleteIndex');
+        $deleteMethod->setAccessible(true);
+        $deleteMethod->invoke($index);
+
+        $processedCount = 0;
+
+        $index->searchables()->lazy()->each(function ($searchables) use ($index, $chunkSize, &$processedCount) {
+            $searchables->chunk($chunkSize)->each(function ($chunk) use ($index, &$processedCount) {
+                $index->insertMultiple($chunk);
+                $processedCount += $chunk->count();
+                $this->line("Processed {$processedCount} items");
+            });
+        });
     }
 
     private function getIndexes()
